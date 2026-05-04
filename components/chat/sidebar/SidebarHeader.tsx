@@ -15,7 +15,7 @@ export default function SidebarHeader({
       style={{ borderBottom: "1px solid var(--border)" }}
     >
       <div className="flex items-center gap-3">
-        <Avatar name={displayName} size={36} />
+        <Avatar name={displayName} size={40} />
         <span
           className="font-semibold text-sm"
           style={{ color: "var(--text-primary)" }}
