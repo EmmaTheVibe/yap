@@ -4,7 +4,7 @@ interface AvatarProps {
   online?: boolean;
 }
 
-export default function Avatar({ name, size = 40, online }: AvatarProps) {
+export default function Avatar({ name, size = 40 }: AvatarProps) {
   const safeName = name.trim() || "User";
   const initials = safeName
     .split(" ")
@@ -36,7 +36,7 @@ export default function Avatar({ name, size = 40, online }: AvatarProps) {
       >
         {initials}
       </div>
-      {online !== undefined && (
+      {/* {online !== undefined && (
         <span
           className="absolute bottom-0 right-0 rounded-full border-2"
           style={{
@@ -46,7 +46,7 @@ export default function Avatar({ name, size = 40, online }: AvatarProps) {
             borderColor: "var(--bg-sidebar)",
           }}
         />
-      )}
+      )} */}
     </div>
   );
 }

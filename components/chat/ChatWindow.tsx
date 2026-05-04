@@ -117,12 +117,6 @@ export default function ChatWindow({
               />
             </svg>
           </div>
-          <p
-            className="text-xs"
-            style={{ color: isOnline ? "var(--accent)" : "var(--text-muted)" }}
-          >
-            {isOnline ? "Online" : "Offline"}
-          </p>
         </div>
       </div>
 
