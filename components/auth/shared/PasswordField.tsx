@@ -37,7 +37,7 @@ export default function PasswordField({
           aria-label={label}
           aria-invalid={!!error}
           aria-describedby={error ? describedBy : undefined}
-          className="w-full rounded-lg py-3 pl-4 pr-12 text-sm focus:outline-none"
+          className="w-full rounded-lg py-3 pl-4 pr-12 text-base focus:outline-none"
           style={{
             background: "var(--bg-input)",
             color: "var(--text-primary)",
@@ -57,7 +57,11 @@ export default function PasswordField({
         </button>
       </div>
       {error && (
-        <p id={describedBy} className="mt-1 text-xs" style={{ color: "#f87171" }}>
+        <p
+          id={describedBy}
+          className="mt-1 text-xs"
+          style={{ color: "#f87171" }}
+        >
           {error.message}
         </p>
       )}

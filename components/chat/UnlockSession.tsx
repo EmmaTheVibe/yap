@@ -85,7 +85,7 @@ export default function UnlockSession({
                 aria-describedby={
                   errors.password ? "unlock-password-error" : undefined
                 }
-                className="w-full rounded-lg py-3 pl-4 pr-12 text-sm focus:outline-none"
+                className="w-full rounded-lg py-3 pl-4 pr-12 text-base focus:outline-none"
                 style={{
                   background: "var(--bg-input)",
                   color: "var(--text-primary)",

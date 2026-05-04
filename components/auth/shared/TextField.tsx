@@ -26,7 +26,7 @@ export default function TextField({
         aria-label={label}
         aria-invalid={!!error}
         aria-describedby={error ? describedBy : undefined}
-        className="w-full rounded-lg px-4 py-3 text-sm focus:outline-none"
+        className="w-full rounded-lg px-4 py-3 text-base focus:outline-none"
         style={{
           background: "var(--bg-input)",
           color: "var(--text-primary)",

@@ -53,7 +53,7 @@ export default function MessageInput({ onSend, disabled }: MessageInputProps) {
       }}
     >
       <div
-        className="flex-1 flex items-end rounded-full px-4 py-2"
+        className="flex-1 flex items-end rounded-full px-4 py-3"
         style={{ background: "var(--bg-input)" }}
       >
         <textarea
@@ -67,7 +67,7 @@ export default function MessageInput({ onSend, disabled }: MessageInputProps) {
           placeholder="Type a message..."
           rows={1}
           disabled={disabled || sending}
-          className="no-focus-ring flex-1 bg-transparent text-sm resize-none focus:outline-none focus-visible:outline-none leading-5"
+          className="no-focus-ring flex-1 bg-transparent text-base resize-none focus:outline-none focus-visible:outline-none leading-5"
           style={{
             color: "var(--text-primary)",
             maxHeight: 120,

@@ -36,7 +36,7 @@ export default function SidebarSearch({ query, onChange }: SidebarSearchProps) {
           placeholder="Search or start new chat"
           value={query}
           onChange={(e) => onChange(e.target.value)}
-          className="no-focus-ring flex-1 bg-transparent text-sm focus:outline-none focus-visible:outline-none"
+          className="no-focus-ring flex-1 bg-transparent text-base focus:outline-none focus-visible:outline-none"
           style={{ color: "var(--text-primary)" }}
         />
         {query && (

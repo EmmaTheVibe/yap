@@ -36,7 +36,6 @@ body {
   outline: none;
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
