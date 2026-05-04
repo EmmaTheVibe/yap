@@ -65,7 +65,7 @@ export default function LoginForm() {
     <div className="w-full max-w-sm">
       <AuthHeader
         title="Welcome back"
-        subtitle="Your messages are always end-to-end encrypted 🔒"
+        subtitle="Yapp with friends and family!"
       />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>

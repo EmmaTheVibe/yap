@@ -86,7 +86,7 @@ export default function RegisterForm() {
     <div className="w-full max-w-sm">
       <AuthHeader
         title="Create account"
-        subtitle="Your keys are generated on your device 🔑"
+        subtitle="Yapp with friends and family!"
         subtitleClassName="mt-5"
       />
 
