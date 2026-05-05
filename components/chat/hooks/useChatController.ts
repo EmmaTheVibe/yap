@@ -54,7 +54,7 @@ export function useChatController(session: Session | null) {
         const decrypted = await Promise.all(ordered.map(decryptOne));
         dispatch({ type: "SET_MESSAGES", userId, messages: decrypted });
       } catch {
-        // Message load errors are handled visually in future UI polish.
+        // Message load errors are handled visually
       } finally {
         dispatch({ type: "SET_LOADING_MESSAGES", value: false });
       }

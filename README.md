@@ -164,7 +164,7 @@ wss://whisperbox.koyeb.app/ws?token=<access_token>
 - No encrypted local message cache.
 - No attachments or media encryption.
 - Password recovery is not supported; losing the password means losing access to decrypt old messages.
-- WebSocket send persistence can depend on backend behavior, so the app uses REST sending as the persistence source of truth.
+- WebSocket delivery depends on backend connection state, so the app falls back to REST sending when the socket is unavailable.
 - The Next.js proxy is a CORS workaround for browser development and deployment compatibility.
 
 ## Running Locally
