@@ -1,5 +1,3 @@
-// In-memory session store — private key lives here only, never persisted
-
 import { Session } from "@/types/auth";
 
 let _session: Session | null = null;
