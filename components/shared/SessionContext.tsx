@@ -94,50 +94,53 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [session, login]);
 
-  const restore = useCallback(async (password: string) => {
-    const stored = await loadWrappedSession();
+  const restore = useCallback(
+    async (password: string) => {
+      const stored = await loadWrappedSession();
 
-    if (!stored) {
-      setHasStoredSession(false);
-      throw new Error("No saved session found. Please log in again.");
-    }
+      if (!stored) {
+        setHasStoredSession(false);
+        throw new Error("No saved session found. Please log in again.");
+      }
 
-    setRefreshToken(stored.refresh_token);
+      setRefreshToken(stored.refresh_token);
 
-    let accessToken = "";
-    let user: Session["user"];
+      let accessToken = "";
+      let user: Session["user"];
 
-    try {
-      const refreshed = await apiRefresh(stored.refresh_token);
-      accessToken = refreshed.access_token;
-      user = await apiMe(accessToken);
-    } catch {
-      clearSession();
-      setRefreshToken(null);
-      setHasStoredSession(false);
-      await clearStoredSession();
-      throw new Error("Saved session expired. Please log in again.");
-    }
+      try {
+        const refreshed = await apiRefresh(stored.refresh_token);
+        accessToken = refreshed.access_token;
+        user = await apiMe(accessToken);
+      } catch {
+        clearSession();
+        setRefreshToken(null);
+        setHasStoredSession(false);
+        await clearStoredSession();
+        throw new Error("Saved session expired. Please log in again.");
+      }
 
-    let privateKey: CryptoKey;
+      let privateKey: CryptoKey;
 
-    try {
-      privateKey = await unwrapPrivateKey(
-        user.wrapped_private_key,
-        password,
-        user.pbkdf2_salt,
-      );
-    } catch {
-      throw new Error("Could not unlock private key. Check your password.");
-    }
+      try {
+        privateKey = await unwrapPrivateKey(
+          user.wrapped_private_key,
+          password,
+          user.pbkdf2_salt,
+        );
+      } catch {
+        throw new Error("Incorrect password.");
+      }
 
-    login({
-      user,
-      accessToken,
-      refreshToken: stored.refresh_token,
-      privateKey,
-    });
-  }, [login]);
+      login({
+        user,
+        accessToken,
+        refreshToken: stored.refresh_token,
+        privateKey,
+      });
+    },
+    [login],
+  );
 
   return (
     <SessionContext.Provider
