@@ -22,7 +22,8 @@ export type ChatAction =
   | { type: "USER_OFFLINE"; userId: string }
   | { type: "SET_VIEW"; view: ChatView }
   | { type: "UPSERT_CONVERSATION"; convo: ConversationSummary }
-  | { type: "RECONCILE_MESSAGE"; userId: string; clientId: string; message: Message };
+  | { type: "RECONCILE_MESSAGE"; userId: string; clientId: string; message: Message }
+  | { type: "MARK_DELIVERED"; messageId: string };
 
 export const initialChatState: ChatState = {
   conversations: [],
@@ -131,6 +132,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         conversations: [action.convo, ...state.conversations],
       };
+    }
+
+    case "MARK_DELIVERED": {
+      const updated: Record<string, Message[]> = {};
+      for (const [uid, msgs] of Object.entries(state.messagesByUser)) {
+        updated[uid] = msgs.map((m) =>
+          m.id === action.messageId ? { ...m, delivered: true } : m,
+        );
+      }
+      return { ...state, messagesByUser: updated };
     }
 
     case "RECONCILE_MESSAGE": {

@@ -199,6 +199,10 @@ export function useChatController(session: Session | null) {
       loadConversations();
     });
 
+    const offDelivered = wsManager.on("message.delivered", (messageId) => {
+      dispatch({ type: "MARK_DELIVERED", messageId });
+    });
+
     const offOnline = wsManager.on("user.online", (userId) => {
       dispatch({ type: "USER_ONLINE", userId });
     });
@@ -209,6 +213,7 @@ export function useChatController(session: Session | null) {
 
     return () => {
       offMessage();
+      offDelivered();
       offOnline();
       offOffline();
     };

@@ -462,6 +462,23 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
     for pid in partner_ids_for(db, user_id):
         await manager.send(pid, {"event": "user.online", "user_id": user_id})
 
+    # Mark undelivered messages to this user as delivered and notify senders
+    undelivered = db.execute(
+        "SELECT * FROM messages WHERE to_user_id = ? AND delivered = 0",
+        (user_id,),
+    ).fetchall()
+    if undelivered:
+        db.execute(
+            "UPDATE messages SET delivered = 1 WHERE to_user_id = ? AND delivered = 0",
+            (user_id,),
+        )
+        db.commit()
+        for msg in undelivered:
+            await manager.send(msg["from_user_id"], {
+                "event": "message.delivered",
+                "message_id": msg["id"],
+            })
+
     try:
         while True:
             try:
