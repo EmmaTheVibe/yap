@@ -23,7 +23,7 @@ export type ChatAction =
   | { type: "SET_VIEW"; view: ChatView }
   | { type: "UPSERT_CONVERSATION"; convo: ConversationSummary }
   | { type: "RECONCILE_MESSAGE"; userId: string; clientId: string; message: Message }
-  | { type: "MARK_DELIVERED"; messageId: string };
+  | { type: "MARK_DELIVERED"; toUserId: string };
 
 export const initialChatState: ChatState = {
   conversations: [],
@@ -138,7 +138,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const updated: Record<string, Message[]> = {};
       for (const [uid, msgs] of Object.entries(state.messagesByUser)) {
         updated[uid] = msgs.map((m) =>
-          m.id === action.messageId ? { ...m, delivered: true } : m,
+          m.to_user_id === action.toUserId ? { ...m, delivered: true } : m,
         );
       }
       return { ...state, messagesByUser: updated };

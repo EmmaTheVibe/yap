@@ -4,7 +4,7 @@ const WS_BASE = "wss://yap-production-b9c0.up.railway.app/ws";
 
 type WSEventMap = {
   "message.receive": (msg: Message) => void;
-  "message.delivered": (messageId: string) => void;
+  "messages.delivered": (toUserId: string) => void;
   "user.online": (userId: string) => void;
   "user.offline": (userId: string) => void;
   connected: () => void;
@@ -24,7 +24,7 @@ class WebSocketManager {
 
   private listeners: Listeners = {
     "message.receive": new Set(),
-    "message.delivered": new Set(),
+    "messages.delivered": new Set(),
     "user.online": new Set(),
     "user.offline": new Set(),
     connected: new Set(),
@@ -89,9 +89,9 @@ class WebSocketManager {
           this.listeners["message.receive"].forEach((cb) =>
             cb(rest as Message),
           );
-        } else if (event === "message.delivered") {
-          this.listeners["message.delivered"].forEach((cb) =>
-            cb(rest.message_id as string),
+        } else if (event === "messages.delivered") {
+          this.listeners["messages.delivered"].forEach((cb) =>
+            cb(rest.to_user_id as string),
           );
         } else if (event === "user.online") {
           this.listeners["user.online"].forEach((cb) => cb(rest.user_id));

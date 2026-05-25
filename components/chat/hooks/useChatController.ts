@@ -199,8 +199,8 @@ export function useChatController(session: Session | null) {
       loadConversations();
     });
 
-    const offDelivered = wsManager.on("message.delivered", (messageId) => {
-      dispatch({ type: "MARK_DELIVERED", messageId });
+    const offDelivered = wsManager.on("messages.delivered", (toUserId) => {
+      dispatch({ type: "MARK_DELIVERED", toUserId });
     });
 
     const offOnline = wsManager.on("user.online", (userId) => {
