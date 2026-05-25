@@ -1,4 +1,5 @@
 import { Message } from "@/types/message";
+import MessageStatusIcon from "./MessageStatusIcon";
 
 interface MessageBubbleProps {
   message: Message;
@@ -47,26 +48,10 @@ export default function MessageBubble({ message, isSent }: MessageBubbleProps) {
             {formatTime(message.created_at)}
           </span>
           {isSent && !failed && (
-            <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
-              <path
-                d="M1 5l3 3 5-7"
-                stroke={
-                  message.delivered ? "var(--accent)" : "var(--text-muted)"
-                }
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M5 5l3 3 5-7"
-                stroke={
-                  message.delivered ? "var(--accent)" : "var(--text-muted)"
-                }
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <MessageStatusIcon
+              delivered={message.delivered}
+              status={message.sendStatus}
+            />
           )}
         </div>
       </div>

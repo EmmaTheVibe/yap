@@ -1,4 +1,4 @@
-const UPSTREAM_BASE = "https://whisperbox.koyeb.app";
+const UPSTREAM_BASE = "http://localhost:8000";
 
 type RouteCtx = {
   params: Promise<{ path: string[] }>;

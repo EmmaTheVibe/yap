@@ -5,6 +5,8 @@ export type EncryptedPayload = {
   encryptedKeyForSelf: string;
 };
 
+export type MessageSendStatus = "pending" | "sent" | "delivered" | "failed";
+
 export type Message = {
   id: string;
   from_user_id: string;
@@ -14,6 +16,8 @@ export type Message = {
   created_at: string;
   text?: string;
   decryptError?: boolean;
+  sendStatus?: MessageSendStatus;
+  client_id?: string;
 };
 
 export type ConversationSummary = {

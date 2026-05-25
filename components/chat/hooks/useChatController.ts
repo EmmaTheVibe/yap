@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer } from "react";
 import { Session, UserPublicInfo } from "@/types/auth";
-import { Message } from "@/types/message";
+import { EncryptedPayload, Message } from "@/types/message";
 import {
   apiGetConversations,
   apiGetMessages,
@@ -94,29 +94,39 @@ export function useChatController(session: Session | null) {
     async (text: string) => {
       if (!state.activeUserId || !session) return;
 
+      let payload: EncryptedPayload | null = null;
+
       try {
         const recipientPublicKey = await apiGetPublicKey(state.activeUserId);
-        const payload = await encryptMessage(
+        payload = await encryptMessage(
           text,
           recipientPublicKey,
           session.user.public_key,
         );
 
+        const clientId = crypto.randomUUID();
         const sentRealtime = wsManager.send("message.send", {
           to: state.activeUserId,
           payload,
+          client_id: clientId,
         });
         const message = sentRealtime
           ? {
               id: crypto.randomUUID(),
+              client_id: clientId,
               from_user_id: session.user.id,
               to_user_id: state.activeUserId,
               payload,
               delivered: false,
               created_at: new Date().toISOString(),
               text,
+              sendStatus: "pending" as const,
             }
-          : { ...(await apiSendMessage(state.activeUserId, payload)), text };
+          : {
+              ...(await apiSendMessage(state.activeUserId, payload)),
+              text,
+              sendStatus: "sent" as const,
+            };
 
         dispatch({
           type: "ADD_MESSAGE",
@@ -134,6 +144,23 @@ export function useChatController(session: Session | null) {
         });
       } catch (err) {
         console.error("Send failed:", err);
+
+        if (!payload) return;
+
+        dispatch({
+          type: "ADD_MESSAGE",
+          userId: state.activeUserId,
+          message: {
+            id: crypto.randomUUID(),
+            from_user_id: session.user.id,
+            to_user_id: state.activeUserId,
+            payload,
+            delivered: false,
+            created_at: new Date().toISOString(),
+            text,
+            sendStatus: "failed",
+          },
+        });
       }
     },
     [state.activeUserId, state.activeUserName, session],
@@ -145,13 +172,21 @@ export function useChatController(session: Session | null) {
 
   useEffect(() => {
     const offMessage = wsManager.on("message.receive", async (msg) => {
-      const partnerId =
-        msg.from_user_id === session?.user.id
-          ? msg.to_user_id
-          : msg.from_user_id;
+      const isMine = msg.from_user_id === session?.user.id;
+      const partnerId = isMine ? msg.to_user_id : msg.from_user_id;
 
       const decrypted = await decryptOne(msg);
-      dispatch({ type: "ADD_MESSAGE", userId: partnerId, message: decrypted });
+
+      if (isMine && msg.client_id) {
+        dispatch({
+          type: "RECONCILE_MESSAGE",
+          userId: partnerId,
+          clientId: msg.client_id,
+          message: { ...decrypted, sendStatus: "sent" },
+        });
+      } else {
+        dispatch({ type: "ADD_MESSAGE", userId: partnerId, message: decrypted });
+      }
       dispatch({
         type: "UPSERT_CONVERSATION",
         convo: {

@@ -1,6 +1,6 @@
 import { Message } from "@/types/message";
 
-const WS_BASE = "wss://whisperbox.koyeb.app/ws";
+const WS_BASE = "ws://localhost:8000/ws";
 
 type WSEventMap = {
   "message.receive": (msg: Message) => void;
