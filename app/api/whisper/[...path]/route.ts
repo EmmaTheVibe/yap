@@ -1,4 +1,4 @@
-const UPSTREAM_BASE = "http://localhost:8000";
+const UPSTREAM_BASE = "https://yap-production-b9c0.up.railway.app";
 
 type RouteCtx = {
   params: Promise<{ path: string[] }>;

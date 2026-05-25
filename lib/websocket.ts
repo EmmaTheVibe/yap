@@ -1,6 +1,6 @@
 import { Message } from "@/types/message";
 
-const WS_BASE = "ws://localhost:8000/ws";
+const WS_BASE = "wss://yap-production-b9c0.up.railway.app/ws";
 
 type WSEventMap = {
   "message.receive": (msg: Message) => void;
