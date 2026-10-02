@@ -1,4 +1,4 @@
-const UPSTREAM_BASE = "https://yap-production-b9c0.up.railway.app";
+const UPSTREAM_BASE = process.env.API_BASE_URL;
 
 type RouteCtx = {
   params: Promise<{ path: string[] }>;
@@ -7,6 +7,14 @@ type RouteCtx = {
 const FORWARDED_HEADERS = ["authorization", "accept"];
 
 async function proxy(request: Request, { params }: RouteCtx) {
+  if (!UPSTREAM_BASE) {
+    console.error("API_BASE_URL is not set");
+    return Response.json(
+      { detail: "Server misconfigured: API_BASE_URL is not set" },
+      { status: 500 },
+    );
+  }
+
   const { path } = await params;
   const upstreamUrl = new URL(
     `/${path.map(encodeURIComponent).join("/")}`,

@@ -1,6 +1,6 @@
 import { Message } from "@/types/message";
 
-const WS_BASE = "wss://yap-production-b9c0.up.railway.app/ws";
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL;
 
 type WSEventMap = {
   "message.receive": (msg: Message) => void;
@@ -73,6 +73,10 @@ class WebSocketManager {
 
   private _open() {
     if (!this.token) return;
+    if (!WS_BASE) {
+      console.error("NEXT_PUBLIC_WS_URL is not set");
+      return;
+    }
     this.ws = new WebSocket(`${WS_BASE}?token=${this.token}`);
 
     this.ws.onopen = () => {

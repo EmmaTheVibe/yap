@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -9,20 +8,25 @@ from typing import Optional
 
 import secrets
 
+import libsql
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-# ── Config ────────────────────────────────────────────────────────────────────
+
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 30
 DB_PATH = os.getenv("DB_PATH", "yap.db")
+# When set, use the remote Turso database instead of the local DB_PATH file
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
 bearer = HTTPBearer()
 
@@ -36,56 +40,91 @@ def verify_password(password: str, stored: str) -> bool:
     key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600_000)
     return secrets.compare_digest(key.hex(), key_hex)
 
-# ── Database ──────────────────────────────────────────────────────────────────
+
+
+class Result:
+    """Wraps a libsql cursor so rows can be read by column name, like sqlite3.Row."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def _to_dict(self, row):
+        if row is None:
+            return None
+        columns = [d[0] for d in self._cursor.description]
+        return dict(zip(columns, row))
+
+    def fetchone(self) -> Optional[dict]:
+        return self._to_dict(self._cursor.fetchone())
+
+    def fetchall(self) -> list[dict]:
+        return [self._to_dict(row) for row in self._cursor.fetchall()]
+
+
+class Database:
+    def __init__(self):
+        if TURSO_DATABASE_URL:
+            self._conn = libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
+        else:
+            self._conn = libsql.connect(DB_PATH)
+            self._conn.execute("PRAGMA foreign_keys=ON")
+
+    def execute(self, sql: str, params: tuple = ()) -> Result:
+        return Result(self._conn.execute(sql, params))
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    db = Database()
     try:
-        yield conn
+        yield db
     finally:
-        conn.close()
+        db.close()
+
+
+SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS users (
+        id                  TEXT PRIMARY KEY,
+        username            TEXT UNIQUE NOT NULL,
+        display_name        TEXT NOT NULL,
+        password_hash       TEXT NOT NULL,
+        public_key          TEXT NOT NULL,
+        wrapped_private_key TEXT NOT NULL,
+        pbkdf2_salt         TEXT NOT NULL,
+        created_at          TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS messages (
+        id                    TEXT PRIMARY KEY,
+        from_user_id          TEXT NOT NULL REFERENCES users(id),
+        to_user_id            TEXT NOT NULL REFERENCES users(id),
+        ciphertext            TEXT NOT NULL,
+        iv                    TEXT NOT NULL,
+        encrypted_key         TEXT NOT NULL,
+        encrypted_key_for_self TEXT NOT NULL,
+        delivered             INTEGER NOT NULL DEFAULT 0,
+        created_at            TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS refresh_tokens (
+        token      TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id),
+        expires_at TEXT NOT NULL
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_messages_conversation
+        ON messages(from_user_id, to_user_id, created_at)""",
+]
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id                  TEXT PRIMARY KEY,
-            username            TEXT UNIQUE NOT NULL,
-            display_name        TEXT NOT NULL,
-            password_hash       TEXT NOT NULL,
-            public_key          TEXT NOT NULL,
-            wrapped_private_key TEXT NOT NULL,
-            pbkdf2_salt         TEXT NOT NULL,
-            created_at          TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-            id                    TEXT PRIMARY KEY,
-            from_user_id          TEXT NOT NULL REFERENCES users(id),
-            to_user_id            TEXT NOT NULL REFERENCES users(id),
-            ciphertext            TEXT NOT NULL,
-            iv                    TEXT NOT NULL,
-            encrypted_key         TEXT NOT NULL,
-            encrypted_key_for_self TEXT NOT NULL,
-            delivered             INTEGER NOT NULL DEFAULT 0,
-            created_at            TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS refresh_tokens (
-            token      TEXT PRIMARY KEY,
-            user_id    TEXT NOT NULL REFERENCES users(id),
-            expires_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_messages_conversation
-            ON messages(from_user_id, to_user_id, created_at);
-    """)
-    conn.commit()
-    conn.close()
+    db = Database()
+    for statement in SCHEMA:
+        db.execute(statement)
+    db.commit()
+    db.close()
 
 
 # ── WebSocket manager ─────────────────────────────────────────────────────────
@@ -116,7 +155,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -134,7 +173,7 @@ app.add_middleware(
 )
 
 
-# ── Auth helpers ──────────────────────────────────────────────────────────────
+
 
 def create_access_token(user_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -156,17 +195,72 @@ def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(bear
     return decode_token(credentials.credentials)
 
 
-def partner_ids_for(db: sqlite3.Connection, user_id: str) -> list[str]:
-    rows = db.execute("""
-        SELECT DISTINCT
-            CASE WHEN from_user_id = ? THEN to_user_id ELSE from_user_id END AS pid
-        FROM messages
-        WHERE from_user_id = ? OR to_user_id = ?
-    """, (user_id, user_id, user_id)).fetchall()
-    return [r["pid"] for r in rows]
+def partner_ids_for(user_id: str) -> list[str]:
+    db = Database()
+    try:
+        rows = db.execute("""
+            SELECT DISTINCT
+                CASE WHEN from_user_id = ? THEN to_user_id ELSE from_user_id END AS pid
+            FROM messages
+            WHERE from_user_id = ? OR to_user_id = ?
+        """, (user_id, user_id, user_id)).fetchall()
+        return [r["pid"] for r in rows]
+    finally:
+        db.close()
 
 
-def format_message(row: sqlite3.Row) -> dict:
+def store_message(from_user_id: str, to_user_id: str, payload: dict) -> Optional[dict]:
+    """Saves a message and returns it, or None if the recipient doesn't exist."""
+    db = Database()
+    try:
+        if not db.execute("SELECT 1 FROM users WHERE id = ?", (to_user_id,)).fetchone():
+            return None
+
+        msg_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        delivered = manager.is_online(to_user_id)
+
+        db.execute(
+            """INSERT INTO messages
+               (id, from_user_id, to_user_id, ciphertext, iv, encrypted_key, encrypted_key_for_self, delivered, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (msg_id, from_user_id, to_user_id, payload["ciphertext"], payload["iv"],
+             payload["encryptedKey"], payload["encryptedKeyForSelf"], int(delivered), now),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    return {
+        "id": msg_id,
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "payload": payload,
+        "delivered": delivered,
+        "created_at": now,
+    }
+
+
+def mark_delivered(user_id: str) -> list[str]:
+    """Marks all undelivered messages to user_id as delivered and returns their senders."""
+    db = Database()
+    try:
+        rows = db.execute(
+            "SELECT DISTINCT from_user_id FROM messages WHERE to_user_id = ? AND delivered = 0",
+            (user_id,),
+        ).fetchall()
+        if rows:
+            db.execute(
+                "UPDATE messages SET delivered = 1 WHERE to_user_id = ? AND delivered = 0",
+                (user_id,),
+            )
+            db.commit()
+        return [r["from_user_id"] for r in rows]
+    finally:
+        db.close()
+
+
+def format_message(row: dict) -> dict:
     return {
         "id": row["id"],
         "from_user_id": row["from_user_id"],
@@ -182,7 +276,7 @@ def format_message(row: sqlite3.Row) -> dict:
     }
 
 
-def format_user(row: sqlite3.Row) -> dict:
+def format_user(row: dict) -> dict:
     return {
         "id": row["id"],
         "username": row["username"],
@@ -194,7 +288,7 @@ def format_user(row: sqlite3.Row) -> dict:
     }
 
 
-def auth_response(db: sqlite3.Connection, user_id: str) -> dict:
+def auth_response(db: Database, user_id: str) -> dict:
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     access_token = create_access_token(user_id)
     refresh_token = str(uuid.uuid4())
@@ -215,7 +309,7 @@ def auth_response(db: sqlite3.Connection, user_id: str) -> dict:
     }
 
 
-# ── Schemas ───────────────────────────────────────────────────────────────────
+
 
 class RegisterRequest(BaseModel):
     username: str
@@ -240,10 +334,10 @@ class SendMessageRequest(BaseModel):
     payload: dict
 
 
-# ── Auth routes ───────────────────────────────────────────────────────────────
+
 
 @app.post("/auth/register", status_code=201)
-def register(body: RegisterRequest, db: sqlite3.Connection = Depends(get_db)):
+def register(body: RegisterRequest, db: Database = Depends(get_db)):
     if db.execute("SELECT 1 FROM users WHERE username = ?", (body.username,)).fetchone():
         raise HTTPException(status_code=400, detail="Username already taken")
 
@@ -262,7 +356,7 @@ def register(body: RegisterRequest, db: sqlite3.Connection = Depends(get_db)):
 
 
 @app.post("/auth/login")
-def login(body: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
+def login(body: LoginRequest, db: Database = Depends(get_db)):
     user = db.execute("SELECT * FROM users WHERE username = ?", (body.username,)).fetchone()
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -270,7 +364,7 @@ def login(body: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
 
 
 @app.post("/auth/refresh")
-def refresh(body: RefreshRequest, db: sqlite3.Connection = Depends(get_db)):
+def refresh(body: RefreshRequest, db: Database = Depends(get_db)):
     row = db.execute(
         "SELECT * FROM refresh_tokens WHERE token = ?", (body.refresh_token,)
     ).fetchone()
@@ -292,7 +386,7 @@ def refresh(body: RefreshRequest, db: sqlite3.Connection = Depends(get_db)):
 
 
 @app.get("/auth/me")
-def me(user_id: str = Depends(get_current_user_id), db: sqlite3.Connection = Depends(get_db)):
+def me(user_id: str = Depends(get_current_user_id), db: Database = Depends(get_db)):
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -303,7 +397,7 @@ def me(user_id: str = Depends(get_current_user_id), db: sqlite3.Connection = Dep
 def logout(
     body: LogoutRequest,
     user_id: str = Depends(get_current_user_id),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     db.execute(
         "DELETE FROM refresh_tokens WHERE token = ? AND user_id = ?",
@@ -312,13 +406,13 @@ def logout(
     db.commit()
 
 
-# ── User routes ───────────────────────────────────────────────────────────────
+
 
 @app.get("/users/search")
 def search_users(
     q: str = Query(..., min_length=1),
     user_id: str = Depends(get_current_user_id),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     rows = db.execute(
         """SELECT id, username, display_name FROM users
@@ -333,7 +427,7 @@ def search_users(
 def get_public_key(
     target_id: str,
     _: str = Depends(get_current_user_id),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     user = db.execute("SELECT public_key FROM users WHERE id = ?", (target_id,)).fetchone()
     if not user:
@@ -341,12 +435,12 @@ def get_public_key(
     return {"public_key": user["public_key"]}
 
 
-# ── Conversation routes ───────────────────────────────────────────────────────
+
 
 @app.get("/conversations")
 def get_conversations(
     user_id: str = Depends(get_current_user_id),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     rows = db.execute("""
         SELECT
@@ -380,7 +474,7 @@ def get_messages(
     limit: int = Query(50, ge=1, le=100),
     before: Optional[str] = None,
     user_id: str = Depends(get_current_user_id),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
     base = """
         SELECT * FROM messages
@@ -400,51 +494,24 @@ def get_messages(
     return [format_message(r) for r in rows]
 
 
-# ── Message routes ────────────────────────────────────────────────────────────
+
 
 @app.post("/messages", status_code=201)
 async def send_message(
     body: SendMessageRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    try:
-        if not db.execute("SELECT 1 FROM users WHERE id = ?", (body.to,)).fetchone():
-            raise HTTPException(status_code=404, detail="Recipient not found")
+    message = await run_in_threadpool(store_message, user_id, body.to, body.payload)
+    if not message:
+        raise HTTPException(status_code=404, detail="Recipient not found")
 
-        msg_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        p = body.payload
-        delivered = manager.is_online(body.to)
-
-        db.execute(
-            """INSERT INTO messages
-               (id, from_user_id, to_user_id, ciphertext, iv, encrypted_key, encrypted_key_for_self, delivered, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (msg_id, user_id, body.to, p["ciphertext"], p["iv"],
-             p["encryptedKey"], p["encryptedKeyForSelf"], int(delivered), now),
-        )
-        db.commit()
-    finally:
-        db.close()
-
-    message = {
-        "id": msg_id,
-        "from_user_id": user_id,
-        "to_user_id": body.to,
-        "payload": p,
-        "delivered": delivered,
-        "created_at": now,
-    }
-
-    if delivered:
+    if message["delivered"]:
         await manager.send(body.to, {"event": "message.receive", **message})
 
     return message
 
 
-# ── WebSocket ─────────────────────────────────────────────────────────────────
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
@@ -456,28 +523,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
     await manager.connect(user_id, ws)
 
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-
-    for pid in partner_ids_for(db, user_id):
+    for pid in await run_in_threadpool(partner_ids_for, user_id):
         await manager.send(pid, {"event": "user.online", "user_id": user_id})
 
     # Mark all undelivered messages to this user as delivered and notify each sender once
-    undelivered = db.execute(
-        "SELECT DISTINCT from_user_id FROM messages WHERE to_user_id = ? AND delivered = 0",
-        (user_id,),
-    ).fetchall()
-    if undelivered:
-        db.execute(
-            "UPDATE messages SET delivered = 1 WHERE to_user_id = ? AND delivered = 0",
-            (user_id,),
-        )
-        db.commit()
-        for row in undelivered:
-            await manager.send(row["from_user_id"], {
-                "event": "messages.delivered",
-                "to_user_id": user_id,
-            })
+    for sender_id in await run_in_threadpool(mark_delivered, user_id):
+        await manager.send(sender_id, {
+            "event": "messages.delivered",
+            "to_user_id": user_id,
+        })
 
     try:
         while True:
@@ -495,42 +549,21 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             if not to or not p:
                 continue
 
-            if not db.execute("SELECT 1 FROM users WHERE id = ?", (to,)).fetchone():
+            stored = await run_in_threadpool(store_message, user_id, to, p)
+            if not stored:
                 continue
 
-            msg_id = str(uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat()
-            delivered = manager.is_online(to)
-
-            db.execute(
-                """INSERT INTO messages
-                   (id, from_user_id, to_user_id, ciphertext, iv, encrypted_key, encrypted_key_for_self, delivered, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (msg_id, user_id, to, p["ciphertext"], p["iv"],
-                 p["encryptedKey"], p["encryptedKeyForSelf"], int(delivered), now),
-            )
-            db.commit()
-
-            message = {
-                "event": "message.receive",
-                "id": msg_id,
-                "from_user_id": user_id,
-                "to_user_id": to,
-                "payload": p,
-                "delivered": delivered,
-                "created_at": now,
-            }
+            message = {"event": "message.receive", **stored}
 
             await manager.send(to, message)
-            # Echo back to sender with client_id so the pending message can be reconciled
+
             await manager.send(user_id, {**message, "client_id": client_id})
 
     except WebSocketDisconnect:
         pass
     finally:
         manager.disconnect(user_id)
-        partners = partner_ids_for(db, user_id)
-        db.close()
+        partners = await run_in_threadpool(partner_ids_for, user_id)
         for pid in partners:
             await manager.send(pid, {"event": "user.offline", "user_id": user_id})
 
