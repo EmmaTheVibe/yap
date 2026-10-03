@@ -1,6 +1,6 @@
 # Yapp
 
-Yapp is an end-to-end encrypted messaging client built with Next.js. Messages are encrypted in the browser before they leave the device, and decrypted only after they return to an authenticated recipient device. The backend stores and forwards encrypted payloads; it does not receive message plaintext.
+Yapp is an end-to-end encrypted messaging app with a Next.js frontend and a FastAPI backend. Messages are encrypted in the browser before they leave the device, and decrypted only after they return to an authenticated recipient device. The backend stores and forwards encrypted payloads; it does not receive message plaintext.
 
 ## Features
 
@@ -11,9 +11,12 @@ Yapp is an end-to-end encrypted messaging client built with Next.js. Messages ar
 - Encrypted key copy for the recipient and for the sender
 - Conversation list, user search, message history, and responsive chat UI
 - Unlock screen after reload so the private key is restored into memory only after password entry
-- Same-origin Next.js proxy for the WhisperBox API to avoid browser CORS failures
+- Realtime delivery, online/offline presence, and delivered receipts over WebSockets
+- Same-origin Next.js proxy for the backend API to avoid browser CORS failures
 
 ## Tech Stack
+
+Frontend:
 
 - Next.js 16 App Router
 - React 19
@@ -21,7 +24,19 @@ Yapp is an end-to-end encrypted messaging client built with Next.js. Messages ar
 - Tailwind CSS 4
 - Web Crypto API
 - IndexedDB via `idb`
-- WhisperBox API: `https://whisperbox.koyeb.app`
+
+Backend (`backend/`):
+
+- FastAPI with WebSockets
+- JWT access tokens and refresh tokens
+- PBKDF2 password hashing
+- Turso (libSQL) database in production, local SQLite file in development
+
+Hosting:
+
+- Frontend: Vercel
+- Backend: Render
+- Database: Turso
 
 ## Architecture
 
@@ -38,15 +53,15 @@ Web Crypto API
   |
   |  encrypted payloads only
   v
-Next.js app
+Next.js app (Vercel)
   |
-  |  /api/whisper/* proxy
+  |  REST via /api/whisper/* proxy, realtime via direct WebSocket
   v
-WhisperBox Backend
+FastAPI backend (Render)
   |
   |  stores public keys, wrapped private keys, ciphertext, tokens
   v
-Encrypted message store
+Turso database
 ```
 
 Core client modules:
@@ -57,7 +72,12 @@ Core client modules:
 - `lib/crypto.ts`: all Web Crypto operations
 - `lib/storage.ts`: IndexedDB storage for wrapped session data
 - `lib/api.ts`: authenticated REST client with refresh handling
-- `app/api/whisper/[...path]/route.ts`: same-origin proxy to WhisperBox
+- `lib/websocket.ts`: WebSocket client with automatic reconnect
+- `app/api/whisper/[...path]/route.ts`: same-origin proxy to the backend
+
+Backend:
+
+- `backend/main.py`: auth, user search, public keys, conversations, messages, and the WebSocket endpoint
 
 ## Encryption Flow
 
@@ -127,11 +147,11 @@ IndexedDB does not store plaintext messages or an exported raw private key.
 
 ## API Usage
 
-The app uses the WhisperBox API through a local Next.js route proxy:
+REST requests go through a local Next.js route proxy, which forwards them to the backend set in `API_BASE_URL`:
 
 ```txt
 Browser -> /api/whisper/conversations
-Next.js -> https://whisperbox.koyeb.app/conversations
+Next.js -> $API_BASE_URL/conversations
 ```
 
 Authenticated requests include:
@@ -140,11 +160,29 @@ Authenticated requests include:
 Authorization: Bearer <access_token>
 ```
 
-Access tokens are refreshed with `/auth/refresh` when needed. Realtime delivery uses the documented websocket endpoint:
+Access tokens are refreshed with `/auth/refresh` when needed. Realtime delivery connects directly from the browser to the backend WebSocket set in `NEXT_PUBLIC_WS_URL`:
 
 ```txt
-wss://whisperbox.koyeb.app/ws?token=<access_token>
+$NEXT_PUBLIC_WS_URL?token=<access_token>
 ```
+
+Backend endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/auth/register` | Create an account with public key and wrapped private key |
+| POST | `/auth/login` | Log in and receive tokens |
+| POST | `/auth/refresh` | Get a new access token |
+| GET | `/auth/me` | Current user |
+| POST | `/auth/logout` | Revoke a refresh token |
+| GET | `/users/search?q=` | Find users by username or display name |
+| GET | `/users/{id}/public-key` | Fetch a user's public key |
+| GET | `/conversations` | List conversation partners |
+| GET | `/conversations/{id}/messages` | Message history, paginated with `limit` and `before` |
+| POST | `/messages` | Send a message over REST |
+| WS | `/ws?token=` | Send and receive messages, presence, delivered receipts |
+
+Interactive API docs are served at `/docs` on the backend.
 
 ## Security Decisions
 
@@ -166,8 +204,34 @@ wss://whisperbox.koyeb.app/ws?token=<access_token>
 - Password recovery is not supported; losing the password means losing access to decrypt old messages.
 - WebSocket delivery depends on backend connection state, so the app falls back to REST sending when the socket is unavailable.
 - The Next.js proxy is a CORS workaround for browser development and deployment compatibility.
+- The backend runs on Render's free tier, which sleeps after about 15 minutes without traffic. The first request after that can take 30–60 seconds while it wakes up.
 
 ## Running Locally
+
+### Backend
+
+Requires Python 3.10–3.13 (the `libsql` package has no macOS build for 3.9).
+
+```bash
+cd backend
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+The API runs at `http://localhost:8000`. Without Turso variables set, it uses a local SQLite file at `backend/yap.db`.
+
+### Frontend
+
+Create `.env.local` in the project root:
+
+```bash
+API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+```
+
+To use the deployed backend instead, point both at the Render URL (`https://…` and `wss://…/ws`).
 
 Install dependencies:
 
@@ -198,6 +262,36 @@ Run lint:
 ```bash
 npm run lint
 ```
+
+## Deployment
+
+### Backend (Render)
+
+| Setting | Value |
+|---|---|
+| Root Directory | `backend` |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+
+Environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `PYTHON_VERSION` | Pin to a 3.12.x release; current dependencies don't install on Render's default 3.14 |
+| `SECRET_KEY` | Signs JWT access tokens |
+| `TURSO_DATABASE_URL` | Turso database URL (`libsql://…`) |
+| `TURSO_AUTH_TOKEN` | Turso auth token |
+
+Tables are created automatically on startup.
+
+### Frontend (Vercel)
+
+| Variable | Purpose |
+|---|---|
+| `API_BASE_URL` | Backend URL, used server-side by the proxy |
+| `NEXT_PUBLIC_WS_URL` | Backend WebSocket URL, used in the browser |
+
+`NEXT_PUBLIC_WS_URL` is built into the client bundle, so redeploy after changing it. Database credentials belong only on the backend.
 
 ## Submission Notes
 
